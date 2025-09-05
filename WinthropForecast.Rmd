@@ -1,8 +1,10 @@
 ---
-title: "Winthrop National Fish Hatchery Chinook Salmon Forecast"
+title: "Winthrop National Fish Hatchery Spring Chinook Salmon Forecast"
+author: "Michelle Voight, Flora Gibbs, Greg Fraser, and Jakub Bednarek"
 date: "`r Sys.Date()`"
 output: html_document
 runtime: shiny
+code_download: true
 ---
 
 *This forecast is generated from publicly available data on [PTAGIS.org](https://www.ptagis.org), [Columbia Basin Research DART](http://www.cbr.washington.edu/dart/query/pitadult_hrt), and from [Mid-Columbia Fish & Wildlife Conservation Office](https://www.fws.gov/office/mid-columbia-fish-and-wildlife-conservation).*
@@ -292,4 +294,5 @@ Mig_Plot2
       and N.Paasch. 1994. Comparison of long-term effects of PIT tags and CW tags 
       on coho salmon (Oncorhynchus kisutch).Pages 123-137 in A study to determine
       the biological feasibility of a new fish tagging system.
+
 
