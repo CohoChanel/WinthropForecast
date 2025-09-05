@@ -89,7 +89,7 @@ conversion_rate <- round(mean(ConversionTbl$Conversion), 3)
 
 #Read in PIT tag ratio data and rename columns ***WNFH change
 
-PITratios <- read.csv("C:/Users/mvoight/OneDrive - DOI/WNFH_PITratios.csv")
+PITratios <- read.csv("WNFH_PITratios.csv")
 
 pit_ratios <- PITratios %>%
   mutate(BroodYear = Release.Year-2) %>%
@@ -126,7 +126,7 @@ current_year_BON_counts <- current_year %>%
   replace_na(list("Bonneville Count" = 0, "Expanded Migration Size" = 0)) #Replace NA values with 0
 
 #Read in previous return data *** file needed for WNFH
-dart<-read.csv("C:/Users/mvoight/OneDrive - DOI/WNFH_hrt_pitadult.csv",header = TRUE)
+dart <- read.csv("WNFH_hrt_pitadult.csv")
 dart <- dart[,1:10] #keeps columns 1-10
 
 if (format(Sys.Date(), "%j") < format(as.Date(dart[2,3], format="%m/%d"), "%j")) {
@@ -292,3 +292,4 @@ Mig_Plot2
       and N.Paasch. 1994. Comparison of long-term effects of PIT tags and CW tags 
       on coho salmon (Oncorhynchus kisutch).Pages 123-137 in A study to determine
       the biological feasibility of a new fish tagging system.
+
