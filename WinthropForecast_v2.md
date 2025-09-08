@@ -1,0 +1,298 @@
+---
+title: "Winthrop National Fish Hatchery Spring Chinook Salmon Forecast"
+author: "Michelle Voight, Flora Gibbs, Greg Fraser, and Jakub Bednarek"
+date: "`r Sys.Date()`"
+output: html_document
+runtime: shiny
+code_download: true
+---
+
+*This forecast is generated from publicly available data on [PTAGIS.org](https://www.ptagis.org), [Columbia Basin Research DART](http://www.cbr.washington.edu/dart/query/pitadult_hrt), and from [Mid-Columbia Fish & Wildlife Conservation Office](https://www.fws.gov/office/mid-columbia-fish-and-wildlife-conservation).*
+
+Passive integrated transponder (PIT) tags are used throughout the Columbia River basin to track migratory fish behavior. PIT tags are used to monitor post-release performance metrics including run timing, survival, and forecasting salmon returns. Based on tagging rates (**Table 1**) reported by Winthrop National Fish Hatchery (WNFH) we can expand the PIT tag count at Bonneville Dam to forecast returns to WNFH up to four weeks in advance of their arrival. This advanced notice is used to inform harvest decisions and broodstock needs for WNFH. The forecast follows the model $N = (B * C) / P$, where $B$ is the PIT count at Bonneville Dam $C$ is the survival rate between Bonneville Dam and Spring Creek hatchery outfall at WNFH (conversion rate), and $P$ is the proportion of run completed based on average run timing characteristics (Columbia Basin DART, 2023). The conversion rate is estimated using PIT tag interrogation data at the antenna array at Spring Creek (SCP) and Bonneville Dam (BON).
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(httr)
+library(readr)
+library(tidyverse)
+library(tibble)
+library(here)
+library(lubridate)
+library(reshape2)
+library(egg)
+library(kableExtra)
+library(stringr)
+library(knitr)
+library(rsconnect)
+library(plotly)
+
+
+
+#Connect Web API PTAGIS
+res<-GET("https://api.ptagis.org/reporting/reports/Flora1792/file/Winthrop_Forecast.csv",accept('text/plain'))#gets the API connection
+res #shows you what the details of the file are
+stringi::stri_enc_detect(content(res, "raw"))#tells you what content is encoded as
+
+#Read in PTAGIS returns
+returns<-content(res, encoding = "UTF-16LE")#gets you the return data in table format
+#returns <- as.data.frame(returns)
+
+#Reformat date columns as dates
+returns$`Release Date` <- as.Date(
+  returns$`Release Date`, format("%m/%d/%Y"))
+returns$`First Obs Date Max` <- as.Date(
+  returns$`First Obs Date Max`, format("%m/%d/%Y"))
+returns$`Last Obs Date Min` <- as.Date(
+  returns$`Last Obs Date Min`, format("%m/%d/%Y"))
+
+#Make a new table with Age added 
+my_returns <- select(returns,'Tag', 'Site', 'First Obs Date Max', 'Brood Year', 'Release Date') %>% 
+  mutate(Age = as.integer(format(returns$`First Obs Date Max`,"%Y")) - `Brood Year`)
+
+#Clean up column names
+colnames(my_returns) <- c("Tagcode", "SiteName", "MigYear", "BroodYear", "RelYear", "Age")
+
+#Abbreviate array name
+my_returns$SiteName = substr(my_returns$SiteName, 1,3)
+
+
+#Create new adult table by filtering fish from age 2-6
+adult_migrants <- my_returns %>%
+  filter( Age > 2 & Age < 8) # ask for WNFH what age range to filter for
+
+#Convert detection date to release year in first date and rel year columns
+adult_migrants$MigYear <- year(adult_migrants$MigYear)
+adult_migrants$RelYear <- year(adult_migrants$RelYear)
+
+#Remove duplicate tag codes at same site, count how many tags/year at each site, reformat table to show counts at each array for each year, arrange by year, and add a grand total tags ** CURRENT POINT - Michelle
+pivot <- adult_migrants %>%
+  filter(duplicated(paste(adult_migrants$Tagcode, adult_migrants$SiteName) != TRUE)) %>% # remove dupes
+  count(MigYear, SiteName) %>% 
+  spread(SiteName, n, fill=0) %>% 
+  arrange(MigYear) %>% 
+  filter(MigYear > 2011 & MigYear < year(Sys.Date())) %>%
+  mutate(GrandTotal=BON+SCP) %>%
+  mutate(ConversionRate = (SCP / 0.87) / BON) #%>%
+  #rename(Year = MigYear)
+
+#Icicle array efficiency, previously calculated  *** change for Winthrop -- ask CJ to run
+SCPefficiency <- 0.87
+
+#Calculate conversion rate for BON, WEA, and SPC for years past 2011(i.e., how many fish make it past each array)
+# *** FOR WNFH what do we want here? BON, Wells, SCP? + what years?
+ConversionTbl <- pivot %>%
+  select(MigYear, BON, WEA, SCP) %>%
+  mutate("Conversion" = round( ( (SCP / SCPefficiency) / BON),3)) %>%
+  filter(MigYear > 2011 & MigYear < year(Sys.Date())) 
+
+#Find average conversion rate over the years, round to 3 dec places
+conversion_rate <- round(mean(ConversionTbl$Conversion), 3)
+
+#Read in PIT tag ratio data and rename columns ***WNFH change
+
+PITratios <- read.csv("WNFH_PITratios.csv")
+
+pit_ratios <- PITratios %>%
+  mutate(BroodYear = Release.Year-2) %>%
+  select(Release.Year, Release.Number, PIT, Ratio, BroodYear) %>%
+  rename(RelYear = Release.Year, RelNumber = Release.Number, NumberTagged = PIT)
+
+#Redefine column types, remove ,'s in number columns
+pit_ratios$BroodYear <- as.integer(pit_ratios$BroodYear)
+pit_ratios$RelNumber <- as.integer( gsub(",", "", pit_ratios$RelNumber))
+pit_ratios$NumberTagged <- as.integer( gsub(",","", pit_ratios$NumberTagged))
+
+```
+
+```{r echo=FALSE, warning=FALSE}
+
+#Get current fish counts over BON
+current_BONcounts <- adult_migrants %>%
+  count(MigYear, BroodYear, Age, SiteName) %>%
+  spread(SiteName, n, fill=0) %>%
+  select(MigYear, BroodYear, Age, BON) %>%
+  filter(MigYear == year(Sys.Date())) ## This years fish
+
+#Make a data frame of ages we are interested in
+current_year <- data.frame(Age = as.integer(c(3,4,5)))
+
+#Make a new table
+current_year <- current_year %>% #Use data frame of ages
+  mutate(BroodYear = as.integer(year(Sys.Date()))-Age) %>% #Add a column for Brood Year
+  left_join(select(current_BONcounts, BroodYear, BON), by = "BroodYear" ) #Join the current BON counts table
+current_year_BON_counts <- current_year %>%
+  left_join(pit_ratios, by = "BroodYear") %>% #Join the PIT tag table
+  mutate("Expanded Migration Size" = BON * Ratio) %>% #Expand the migration size by PIT tag ratio
+  rename("Brood Year" = BroodYear, "Bonneville Count" = BON, "Number Released" = RelNumber, "Number Tagged" = NumberTagged, "Ratio Released:Tagged" = Ratio)%>% #Clean up col names
+  replace_na(list("Bonneville Count" = 0, "Expanded Migration Size" = 0)) #Replace NA values with 0
+
+#Read in previous return data *** file needed for WNFH
+dart <- read.csv("WNFH_hrt_pitadult.csv")
+dart <- dart[,1:10] #keeps columns 1-10
+
+if (format(Sys.Date(), "%j") < format(as.Date(dart[2,3], format="%m/%d"), "%j")) {
+  percent_run <- 0
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,3], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,4], format="%m/%d"), "%j")){
+    percent_run <- 0.05
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,4], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,5], format="%m/%d"), "%j")){
+    percent_run <- 0.10
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,5], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,6], format="%m/%d"), "%j")) {
+    percent_run <- 0.25
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,6], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,7], format="%m/%d"), "%j")) {
+    percent_run <- 0.5
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,7], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,8], format="%m/%d"), "%j")) {
+    percent_run <- 0.75
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,8], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,9], format="%m/%d"), "%j")) {
+    percent_run <- 0.90
+  } else if (format(Sys.Date(), "%j") > format(as.Date(dart[2,9], format="%m/%d"), "%j") &
+         format(Sys.Date(), "%j") <= format(as.Date(dart[2,10], format="%m/%d"), "%j")) {
+    percent_run <- 0.95
+  } else percent_run <- 1
+
+```
+
+`r if(sum(current_year_BON_counts$"Expanded Migration Size") * conversion_rate + 0.0001 /(0.001 + percent_run)  < 1 ){   "**No PIT tags have been detected yet. Hopefully, fish are still on their way!**" } else {   paste("**Forecast to Winthrop NFH:**", round(sum(current_year_BON_counts$"Expanded Migration Size") * conversion_rate / percent_run)) }`
+
+```{r echo=FALSE} 
+
+mytable <- knitr::kable(current_year_BON_counts, "html", align = "c", 
+caption = paste0("Table 1. ", format(Sys.Date(),'%Y'), " WNFH-origin spring Chinook Salmon migration characterists and migration size estimate."))
+kable_styling(mytable, bootstrap_options = c("striped", "hover", "condensed"))#, full_width = F, position = "left")
+
+```
+So far **`r sum(current_year_BON_counts$"Bonneville Count")`** PIT-tagged fish have been detected at Bonneville Dam. This expands to **`r round(sum(current_year_BON_counts$"Expanded Migration Size"),0)`** fish total. 
+
+
+Based on average run timing characteristics the Winthrop? spring Chinook run is `r paste(100 * percent_run,"%", sep = "")` complete (Columbia Basin Research DART 2023). However, the average run timing may not closely represent this year's run. Beer (2007) found significant correlation between in-stream conditions (temperature and flow) and run timing. 
+<br>
+<br>
+<br>
+
+:::::::::::::: {.columns}
+::: {.column width="60%"}
+The following data shows the methods used to develop this forecast. Conversion rate (C) represents the average survival of adults between Bonneville Dam and SCP (**Table 2**). The SCP antenna detected ? 87% of the PIT-tagged adult Chinook Salmon migrating into Spring Creek which was included in the conversion rate. SCP was installed in ? 2011 and available data includes ? 2012 to present. The average conversion rate for these years was `r round(conversion_rate, 2)`.  
+<br>
+<br>
+<br>
+To gauge the strength of this model, we compared PIT tag expansions at Bonneville Dam to actual returns to Spring Creek in Winthrop (**Table 3**). Spring Creek returns are measured by hand counted returns to the hatchery, spawning ground surveys, and creel census of sport and tribal fisheries. These sources are used to reconstruct the total return to Winthrop National Fish Hatchery.
+
+:::
+::: {.column width="40%"}
+```{r echo=FALSE}
+#site_counts %>%
+mytable2 <- ConversionTbl %>%
+  select(MigYear, BON, SCP, Conversion) %>%
+  knitr::kable("html",col.names = c("Migration Year", "BON", "SCP", "Conversion Rate"), align = c("c", "c", "l"), caption = "Table 2. PIT tag counts at Bonneville Dam (BON), Spring Creek Pond Array (SCP) and resulting conversion rates. (PTAGIS, 2023)")
+
+kable_styling(mytable2, bootstrap_options = c("striped", "hover", "condensed"), full_width = F, position = "left")
+```
+:::
+::::::::::::::
+
+
+
+
+```{r, echo=FALSE}
+MigrationTiming<-returns %>%
+  filter(duplicated(paste(returns$Tag,returns$`First Obs Date Max`)!=TRUE))%>%
+  filter(Site=="BON") %>%
+  select('Tag', 'First Obs Date Max') %>%
+  arrange(`First Obs Date Max`) %>%
+  filter(`First Obs Date Max`>'2017-01-01') %>%
+  group_by(`First Obs Date Max`) %>%
+  summarise(NumberofFish=n()) %>%
+  mutate(Year=year(`First Obs Date Max`))
+MigrationTiming$`First Obs Date Max`<-format(MigrationTiming$`First Obs Date Max`,"%m/%d")
+MigrationTiming2<-MigrationTiming %>%
+  filter(`First Obs Date Max`>'03-15',
+         `First Obs Date Max`<'06-01')
+MigrationTiming2017<- MigrationTiming2 %>%
+  filter(Year=="2017")
+MigrationTiming2018<- MigrationTiming2 %>%
+  filter(Year=="2018")
+MigrationTiming2019<- MigrationTiming2 %>%
+  filter(Year=="2019")
+MigrationTiming2020<- MigrationTiming2 %>%
+  filter(Year=="2020")
+MigrationTiming2021 <- MigrationTiming2 %>%
+  filter(Year=="2021")
+MigrationTiming2022 <- MigrationTiming2 %>%
+  filter(Year=="2022")
+MigrationTiming2023 <- MigrationTiming2 %>%
+  filter(Year=="2023")
+MigrationTiming2024 <- MigrationTiming2 %>%
+  filter(Year=="2024")
+MigrationTiming2025 <- MigrationTiming2 %>%
+  filter(Year=="2025")
+```
+<br>
+<br>
+
+```{r, fig.width=10, fig.height=8, echo=FALSE}
+Mig_Plot2<-ggplot(MigrationTiming2,aes(as.Date(`First Obs Date Max`,format="%m/%d"),NumberofFish, colour=Year))+
+  geom_line(data = MigrationTiming2017, aes(color = "orange"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2017, col = "orange", size = 3)+
+  geom_line(data = MigrationTiming2018, aes(color="yellow"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2018, col="yellow",size=3)+
+  geom_line(data = MigrationTiming2019, aes(color="green"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2019, col="green",size=3)+
+  geom_line(data = MigrationTiming2020, aes(color="lightblue"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2020,col="lightblue",size=3)+
+  geom_line(data = MigrationTiming2021, aes(color="blue"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2021,col="blue",size=3)+
+  geom_line(data = MigrationTiming2022, aes(color="purple"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2022,col="purple",size=3)+
+  geom_line(data = MigrationTiming2023, aes(color="pink"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2023,col="pink",size=3)+
+geom_line(data = MigrationTiming2024, aes(color="red"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2024,col="red",size=3)+
+geom_line(data = MigrationTiming2025, aes(color="black"), linewidth = 1.2)+
+  geom_point(data = MigrationTiming2025,col="black",size=3)+
+  theme_article()+
+  xlab("Migration Date")+
+  ylab("Number of PIT-tagged Fish Detected")+
+  scale_color_identity(name='Year', 
+                     breaks = c("orange", "yellow", "green", "lightblue", "blue", "purple", "pink", "red", "black"),
+                     labels = c("2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"),
+                     guide = "legend")+
+  geom_vline(xintercept = as.numeric(as.Date(Sys.Date())), color = "black", linetype=4)+
+  ggtitle("WNFH Spring Chinook PIT Tag Detections over Bonneville")+
+  labs(caption = "Graph 2. Comparison of WNFH Spring Chinook run timing via Bonneville PIT tag detections from 2017-2024 (PTAGIS 2025). \nThe vertical black dotted line is today's date.")+
+    theme(plot.title = element_text(hjust = 0.5,size = 20,face = "bold"), axis.title.x = element_text(size = 20),axis.title.y = element_text(size=20),axis.text = element_text(size=15),legend.title = element_text(size=20),legend.text = element_text(size = 15), legend.key = element_rect(fill = "gray92"), plot.caption = element_text(hjust=0.5,size = 12), panel.background = element_rect(fill = "gray92"))
+
+Mig_Plot2
+```
+
+
+
+
+
+
+### References
+
+    Beer, W.N., 2007. Run timing of adult Chinook Salmon passing Bonneville 
+      Dam on the Columbia River, Seattle: Columbia Basin Research, 
+      White Paper, University of Washington.
+
+    Knudsen C.M., Johnston M.V., Schroder S.L., Bosch W.J., Fast D.E., 
+      Strom C.R., 2011. Effects of Passive Integrated Transponder tags on 
+      smolt-to-adult recruit survival, growth, and behavior of hatchery 
+      spring Chinook Salmon. North Am. Journal of Fisheries Management 29:658-669, 2009
+      
+    McDonald, T.L., S.C. Amstrup, and B.F.J. Manly. 2003.Tag loss can bias
+      Jolly-Seber capture-recapture esti-mates. Wildlife Society Bulletin 31:814-822.
+
+    Prentice, E.F., D.J. Maynard, S.L. Downing, D.A. Frost,M. S. Kellett, 
+      D. A. Bruland, P. Sparks-McConkey, F.W. Waknitz, R. N. Iwamoto, K. McIntyre, 
+      and N.Paasch. 1994. Comparison of long-term effects of PIT tags and CW tags 
+      on coho salmon (Oncorhynchus kisutch).Pages 123-137 in A study to determine
+      the biological feasibility of a new fish tagging system.
+
+
